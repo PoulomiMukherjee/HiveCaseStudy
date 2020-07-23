@@ -1,0 +1,675 @@
+-- creating a new database
+create database case_study_poulomi_megh;
+
+--                  ****** SINCE THE DATABASE IS CREATED, PLEASE RUN CODE FROM HERE ******
+
+
+-- ###### PROBLEM STATEMENT ######
+-- The New York City Taxi & Limousine Commission (TLC) has provided a dataset of trips made by the taxis in the New York City. The detailed trip-level data is more
+-- than just a vast list of taxi pickup and drop off coordinates. The records include fields capturing pick-up and drop-off dates/times, pick-up and drop-off locations
+-- (location coordinates of the starting and ending points), trip distances, itemized fares, rate types, payment types, driver-reported passenger counts etc.
+-- The data used was collected and provided to the NYC Taxi and Limousine Commission (TLC) by technology providers authorized under the Taxicab & Livery Passenger
+-- Enhancement Programs (TPEP/LPEP). The given dataset was created by aggregating the aforementioned records. It provides precise location coordinates for where
+-- the trip started and ended, timestamps for when the trip started and ended, plus a few other variables including fare amount, payment method, and distance travelled.
+
+
+
+-- ###### NYC TAXI CASE STUDY ######
+-- This case study is done in 3 parts:
+-- [] Part 1: Data quality checks & EDA
+-- [] Part 2: Analysis I
+-- [] Part 3: Analysis II
+
+
+-- #### Exploring the dataset ####
+
+-- * VendorID: A code indicating the TPEP provider that provided the record (1= Creative Mobile Technologies, LLC; 2= VeriFone Inc)
+-- * tpep_pickup_datetime: The date and time when the meter was engaged
+-- * tpep_dropoff_datetime: The date and time when the meter was disengaged
+-- * Passenger_count: The number of passengers in the vehicle (this is a driver-entered value)
+-- * Trip_distance: The elapsed trip distance in miles reported by the taximeter
+-- * PULocationID: TLC Taxi Zone in which the taximeter was engaged
+-- * DOLocationID: TLC Taxi Zone in which the taximeter was disengaged
+-- * RateCodeID: The final rate code in effect at the end of the trip (1= Standard rate, 2= JFK, 3= Newark, 4= Nassau or Westchester,
+-- 5= Negotiated fare, 6= Group ride)
+-- * Store_and_fwd_flag: This flag indicates whether the trip record was held in vehicle memory before sending to the vendor, aka
+-- “store and forward,” because the vehicle did not have a connection to the server (Y= store and forward trip, N= not a store and forward trip)
+-- * Payment_type: A numeric code signifying how the passenger paid for the trip (1= Credit card, 2= Cash, 3= No charge, 4= Dispute,
+-- 5= Unknown, 6= Voided trip)
+-- * Fare_amount: The time-and-distance fare calculated by the meter
+-- * Extra: Miscellaneous extras and surcharges (Currently, this only includes the $0.50 and $1 rush hour and overnight charges)
+-- * MTA_tax: $0.50 MTA tax that is automatically triggered based on the metered rate in use
+-- * Improvement_surcharge: $0.30 improvement surcharge assessed trips at the flag drop which began being levied in 2015
+-- * Tip_amount: Tip amount – This field is automatically populated for credit card tips. Cash tips are not included
+-- * Tolls_amount: Total amount of all tolls paid in trip
+-- * Total_amount: The total amount charged to passengers. Does not include cash tips.
+
+
+-- #### Loading the dataset ####
+
+use case_study_poulomi_megh;
+
+-- dropping the table if already present and adding the jar file to create a table
+drop table nyc_tlc_table;
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+
+-- creating an external table where the nyc taxi data is loaded from the HDFS
+create external table if not exists nyc_tlc_table(VendorID int,
+tpep_pickup_datetime timestamp, tpep_dropoff_datetime timestamp,
+passenger_count int, trip_distance double, RatecodeID int, store_fwd_flag string,
+PULocationID int, DOLocationID int, payment_type int,
+fare_amount double, extra double, mta_tax double, tip_amount double, tolls_amount double,
+improvement_surcharge double, total_amount double)
+row format delimited fields terminated by ','
+location '/common_folder/nyc_taxi_data/'
+tblproperties ("skip.header.line.count"="1");
+
+-- checking if table is loading properly
+select * from nyc_tlc_table limit 10;
+
+-- All the columns of the table seem to be loading properly in correct schema and formats.
+
+
+
+
+-- ###### Part 1: Data quality checks & EDA ######
+
+
+-- [1] How many records has each TPEP provider provided? Write a query that summarises the number of records of each provider.
+
+select (case
+when VendorID == 1 then 'Creative Mobile'
+when VendorID == 2 then 'VeriFone'
+else 'others'
+end) as Vendors, count(*) as Total_Records
+from nyc_tlc_table+
+group by vendorid;
+
+-- Using the above query, we can see that VeriFone Inc. has provided 6,47,183 records
+-- On the other hand, Creative Mobile Technologies has given a total of 5,27,386 records.
+-- We can also see that there are only 2 distinct providers.
+
+
+
+-- [2] The data provided is for months November and December only. Check whether the data is consistent, and if not, identify the data quality
+-- issues. Mention all data quality issues in comments.
+
+-- [2.1] First, let us check whether there are any record in which the date and time of dropoff is before the pickup date and time.
+
+select count(*) as error_records
+from nyc_tlc_table
+where unix_timestamp(tpep_dropoff_datetime) < unix_timestamp(tpep_pickup_datetime);
+
+-- According to the results of the above query, there are 73 records in which the date and time of the dropoff is before the date and time
+-- of the pickup.
+
+
+-- [2.2] As the problem statement mentions that the dataset contains records from November 2017 and December 2017, we can check whether the column
+-- containing the pickup date and time contains records from any other time period.
+
+select month(tpep_pickup_datetime)as PU_Month, year(tpep_pickup_datetime)as PU_Year, count(*)as Total_Records
+from nyc_tlc_table
+group by month(tpep_pickup_datetime), year(tpep_pickup_datetime)
+order by PU_Year, PU_Month;
+
+-- The query written above shows that the dataset also contains 1 record from January 2003, 2 from December 2008, 1 from January 2009,
+-- 6 from October 2017, and 4 records from January 2018 in addition to the 5,80,300 records from November 2017 and 5,94,255 records
+-- from December 2017.
+
+
+-- [2.3] Similar to the above query, we can also check whether the dropoff column containing the date and time details carries any record
+-- from any other time period apart from November 2017 and December 2017.
+
+select month(tpep_dropoff_datetime)as DO_Month, year(tpep_dropoff_datetime)as DO_Year, count(*)as Total_Records
+from nyc_tlc_table
+group by month(tpep_dropoff_datetime), year(tpep_dropoff_datetime)
+order by DO_Year, DO_Month;
+
+-- Here, we can see that the data contains 1 record from January 2003, 1 from December 2008, 2 from January 2009, 2 from October 2017,
+-- 110 from January 2018, and 1 record from April 2019 apart from 5,80,053 records from November 2017 and 5,94,399 records from December 2017.
+
+
+-- ## Exploratory Data Analysis ##
+
+-- We can see that these erroneous records are occuring randomly in the dataset. We will need to remove these records before proceeding with
+-- further analysis. However, we will need to perform further exploratory data analysis (EDA) in order to properly clean the data.
+
+-- [2.4] Performing EDA on columns that contain the fare details for each of the trip
+
+select min(fare_amount) as fare_min, max(fare_amount) as fare_max, round(avg(fare_amount),2) as fare_avg,
+min(extra) as extra_chgs_min, max(extra) as extra_chgs_max, round(avg(extra),2) as extra_chgs_avg,
+count(distinct mta_tax) as n_mta_tax, min(mta_tax) as mta_tax_min, max(mta_tax) as mta_tax_max, round(avg(mta_tax),2) as mta_tax_avg,
+min(tip_amount) as tip_min, max(tip_amount) as tip_max, round(avg(tip_amount),2) as tip_avg,
+min(tolls_amount) as toll_min, max(tolls_amount) as toll_max, round(avg(tolls_amount),2) as toll_avg,
+count(distinct improvement_surcharge) as n_surcharge, min(improvement_surcharge) as surcharge_min,
+max(improvement_surcharge) as surcharge_max, round(avg(improvement_surcharge),2) as surcharge_avg,
+min(total_amount) as tot_amt_min, max(total_amount) as tot_amt_max, round(avg(total_amount),2) as tot_amt_avg
+from nyc_tlc_table;
+
+-- This query has helped us make the following observations regarding the fare columns:
+-- >> In this dataset, the fare amount ranges between -200 and 650 while the average fare for each trip is 13. Here, the fare amount cannot be
+-- less than 0 with 0 being for the cancelled trips.
+-- >> The extra charges that are levied vary from -10.6 to 4.8 with an average of 0.32. As per the data dictionary, this column should contain
+-- values that are 0, 0.5 or 1. Hence, all other values are erroneous.
+-- >> There are 5 distict values present in the mta_tax column. While the minimum mta tax levied is -0.5, the maximum and average tax is 11.4
+-- and 0.5 respectively. This column should have only 0 or 0.5 values. Hence, all other values in this column should be discarded.
+-- >> The tip amount varies between -1.16 and 450 with an average of 1.85 within the dataset. The tip amount might be less than 0 in case the
+-- driver has given change for a non-cash payment. So, we will consider the negative values of this column.
+-- >> The minimum, maximum, and average toll charges that have been levied are -5.76, 895.89, and 0.33 respectively. The toll charges levied for
+-- a trip should never be negative. Hence, such records should be dealt with.
+-- >> The improvement_surcharge column contains 4 distinct values with a minimum of -0.3, a maximum of 1, and an average of 0.3. This column
+-- should contain values either 0 or 0.3. Hence, all records with any other values should not be considered for any analysis.
+-- >> The values in the total_amount column ranges from -200.8 to 928.19 along with an average of 16.3. The total amount paid for a trip cannot
+-- be negative. Therefore, records with total_amount < 0 are incorrect. The trips with 0 as total amount might be the ones that were booked but
+-- cancelled.
+
+
+-- [2.5] Performing EDA on all columns except the ones containing the fare details of a trip
+
+select count(*) as total_records,
+max(to_date(tpep_dropoff_datetime)) as latest_dropoff, min(to_date(tpep_dropoff_datetime)) as oldest_dropoff,
+max(to_date(tpep_pickup_datetime)) as latest_pickup, min(to_date(tpep_pickup_datetime)) as oldest_pickup,
+min(passenger_count) as passg_min, max(passenger_count) as passg_max, round(avg(passenger_count),2) as passg_avg,
+min(trip_distance) as shortest_trip, max(trip_distance) as longest_trip, round(avg(trip_distance),2) as trips_avg,
+count(distinct payment_type) as n_payment_typ,
+count(distinct store_fwd_flag) as n_store_forward, count(distinct RatecodeID) as n_rate_code,
+count(distinct PULocationID) as n_pickup_zone, count(distinct DOLocationID) as n_dropoff_zone,
+from nyc_tlc_table;
+
+-- Using this query, the following observations are made:
+-- >> The dataset being used for the analysis contains a total of 11,74,569 records.
+-- >> The date of the most recent pickup is 1 January 2018 while the oldest date for a pickup in the data is 1 January 2003. On the other hand,
+-- the latest dropoff date is mentioned as 24 April 2019 and the date of the oldest dropoff is 1 January 2003. The data in both the date columns
+-- extend beyond the expected period.
+-- >> The minimum number of passengers in a trip is mentioned as 0 which should not be possible since a trip should not have commenced without
+-- any passenger.
+-- >> The maximum and average number of passengers in a trip is 9 and 1.62 respectively. We will assume that this is correct as there can be a trip
+-- where there are 6 adult passengers with 3 children on a 7-seater car.
+-- >> The shortest distance covered in a trip is 0 which could be because of the trip cancellations. 
+-- >> Additionally, the longest distance covered in a trip is 126.41 while the average distance per trip is 2.87.
+-- >> There 2 unique values in the store_fwd_flag column.
+-- >> The RateCodeID column contains 7 unique values which seems like an error since there can only be 6 unique values as per the data dictionary.
+-- >> The number of pickup zones is 246 and the number of dropoff zones is 260.
+-- >> There are 4 types of payment methods recorded in the data.
+
+
+-- ## Column-wise EDA ##
+
+-- [2.6] The RateCodeID column can take the following values: 1= Standard rate, 2= JFK, 3= Newark, 4= Nassau or Westchester, 5= Negotiated fare,
+-- 6= Group ride
+
+select RateCodeID, count(*) as n_records
+from nyc_tlc_table
+group by RateCodeID
+order by RateCodeID;
+
+-- The records with RateCodeID = 99 are incorrect.
+
+
+-- [2.7] For the Payment_type column, the permissible values are: 1= Credit card, 2= Cash, 3= No charge, 4= Dispute, 5= Unknown, 6= Voided trip
+
+select Payment_type, count(*) as n_records
+from nyc_tlc_table
+group by Payment_type
+order by Payment_type;
+
+-- There do not seem to be any non-confirming values in this column.
+
+
+-- [2.8] The Extra column can have values 0, 0.5, or 1 in case any rush-hour or midnight charges are applicable.
+
+select Extra as extra_chgs, count(*) as n_records
+from nyc_tlc_table
+group by Extra
+order by Extra;
+
+-- There are 14 unique values present in this column that lie within -10.6 to 4.8. All the records that contain values other than 0, 0.5, or 1
+-- should be treated as non-confirmities.
+
+
+-- [2.9] The permissible values for the MTA_tax column are 0 or 0.5.
+
+select MTA_tax, count(*) as n_records
+from nyc_tlc_table
+group by MTA_tax
+order by MTA_tax;
+
+-- There are 5 distinct values in this column: -0.5, 0, 0.5, 3, and 11.4. Based on the data dictionary, we will consider all values other
+-- than 0 and 0.5 as erroneous.
+
+
+-- [2.10] Checking if the column named improvement_surcharge has any value other than 0 or 0.3. 
+
+select improvement_surcharge, count(*) as n_records
+from nyc_tlc_table
+group by improvement_surcharge
+order by improvement_surcharge;
+
+-- This column contains distinct values of -0.3, 0, 0.3, and 1 which is not correct according to the data dictionary.
+
+
+-- [2.11] Checking the categorical column store_fwd_flag for any non-conforming value.
+
+select store_fwd_flag, count(*) as n_records
+from nyc_tlc_table
+group by store_fwd_flag;
+
+-- This column contains 2 unique values: 'Y' and 'N'. This affirms the specified limit mentioned in the data dictionary.
+
+
+-- [2.12] Checking the Passenger_count column
+
+select Passenger_count, count(*) as n_records
+from nyc_tlc_table
+group by Passenger_count
+order by Passenger_count;
+
+-- This column contains 6,824 records with 0 passengers. These records should be considered erroneous since a trip should not have commenced with
+-- 0 passengers.
+
+
+-- [2.12] Checking the column Fare_amount with negative amount
+
+-- 1.
+select count(*) as n_NegativeAmt
+from nyc_tlc_table
+where Fare_amount < 0;
+
+-- 2.
+select Fare_amount, count(*) as n_NegativeAmt
+from nyc_tlc_table
+where Fare_amount < 0
+group by Fare_amount
+order by Fare_amount;
+
+-- There are 558 records that contain a negative value for fare charges.
+-- Additionally, the negative fare amounts in the dataset range between -200 and -2.5.
+
+
+-- [2.13] In the Tip_amount column, we should check if there are any instances in which there is a non-zero value is present for a cash payment
+-- since the data dictionary states that such records are not registered.
+
+select Tip_amount, count(*) as n_NegativeTip
+from nyc_tlc_table
+where Tip_amount != 0 and Payment_type == 2
+group by Tip_amount
+order by Tip_amount;
+
+-- There are no records in which a cash payment is made and the tip amount is registered.
+
+
+-- [2.14] Checking the details of the Tolls_amount column where the amount of toll paid is negative
+
+-- 1.
+select count(*) as n_NegativeToll
+from nyc_tlc_table
+where Tolls_amount < 0;
+
+-- 2.
+select Tolls_amount, count(*) as n_NegativeToll
+from nyc_tlc_table
+where Tolls_amount < 0
+group by Tolls_amount
+order by Tolls_amount;
+
+-- There are 3 records with negative toll amount of -5.76.
+
+
+-- [2.15] EDA of the column named Total_amount where the total amount charged is negative
+
+-- 1.
+select count(*) as n_NegativeTotal
+from nyc_tlc_table
+where Total_amount < 0;
+
+-- 2.
+select Total_amount, count(*) as n_NegativeTotal
+from nyc_tlc_table
+where Total_amount < 0
+group by Total_amount
+order by Total_amount;
+
+-- Similar to the Fare_amount column, this column also contains 558 records with negative total amount which range from -200.8 to -3.3.
+
+
+-- [2.16] Checking the number of records where the trip distance is >0 but the total amount is 0
+
+select count(*) as n_records
+from nyc_tlc_table
+where trip_distance > 0 and Total_amount == 0;
+
+-- There are 15 records where the trip distance is greater than 0 but the total amount that has been charged 0. We will consider such records
+-- as erroneous.
+
+-- [2.17] Checking the number of records where the trip distance is 0 but the total amount is > 0
+
+select count(*) as n_records
+from nyc_tlc_table
+where trip_distance == 0 and Total_amount > 0;
+
+-- The number of such records in the dataset is 7,197. This might be because of some cancellation charges that were levied on cancelled trips.
+
+
+
+-- [3] You might have encountered unusual or erroneous rows in the dataset. Can you conclude which vendor is doing a bad job in providing
+-- the records using different columns of the dataset? Summarise your conclusions based on every column where these errors are present.
+-- For example, there are unusual passenger count, i.e. 0 which is unusual.
+
+select VendorID, count(*) as n_Error_Records
+from nyc_tlc_table
+where (unix_timestamp(tpep_dropoff_datetime) < unix_timestamp(tpep_pickup_datetime) or
+year(tpep_pickup_datetime) !=2017 or month(tpep_pickup_datetime) not in (11,12)
+or year(tpep_dropoff_datetime) !=2017 or month(tpep_dropoff_datetime) not in (11,12)
+or (RateCodeID not between 1 and 6) or (passenger_count not between 1 and 10) or trip_distance < 0.0
+or (payment_type not between 1 and 6) or (payment_type==2 and tip_amount!=0) or extra not in (0,0.5,1)
+or Fare_amount < 0 or MTA_tax not in (0,0.5) or improvement_surcharge not in (0,0.3) or Tolls_amount < 0.0 or Total_amount < 0
+or (trip_distance > 0 and Total_amount == 0))
+group by VendorID;
+
+-- VendorID = 1 (Creative Mobile Technologies): This vendor has given 8,716 incorrect records.
+--          As we have seen before that the total number of records provided by Creative Mobile is 5,27,386 records.
+--          Hence, we can see that the percentage of erroneous records for this vendor is 1.65% approximately.
+-- VendorID = 2 (VeriFone Inc.): The number of incorrect records received from this vendor is 3,425.
+--          Additionally, VeriFone has given a total of 6,47,183 records.
+--          So, the percentage of erroneous records for this vendor is around 0.53%.
+
+-- Using the observations made above, we can conclude that Creative Mobile Technologies has provided a significantly higher percentage of
+-- erroneous data.
+
+-- #### Data Cleaning and Partitioning ####
+
+-- The total number of erroneous records present in the dataset is 12,141. As the total number of records available in the dataset
+-- is 11,74,569, the percentage of error based on the above analysis is 1.03 approximately. Since this percentage is very less, we can remove
+-- the erroneous rows from the dataset.
+
+-- Setting the required hive parameters
+
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+
+-- creating a month-wise and day-wise partitioned table since there might be multiple records for every single day for the months of November
+-- and December in 2017
+
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+drop table nyc_tlc_partitioned;
+
+-- creating partitioned external table
+create external table if not exists nyc_tlc_partitioned (VendorID int,
+tpep_pickup_datetime timestamp, tpep_dropoff_datetime timestamp,
+passenger_count int, trip_distance double, RatecodeID int, store_fwd_flag string,
+PULocationID int, DOLocationID int, payment_type int,
+fare_amount double, extra double, mta_tax double, tip_amount double,
+tolls_amount double, improvement_surcharge double, total_amount double)
+partitioned by (trip_month int, trip_day int)
+stored as orc
+location '/user/hive/warehouse/nyc_taxidata_partitioned';
+
+
+-- inserting the filtered data
+insert overwrite table nyc_tlc_partitioned partition (trip_month, trip_day)
+select VendorID, tpep_pickup_datetime, tpep_dropoff_datetime,
+passenger_count, trip_distance, RatecodeID, store_fwd_flag,
+PULocationID, DOLocationID, payment_type,
+fare_amount, extra, mta_tax, tip_amount, tolls_amount,
+improvement_surcharge, total_amount,
+month(tpep_pickup_datetime) as trip_month, day(tpep_pickup_datetime) as trip_day
+from nyc_tlc_table
+where (unix_timestamp(tpep_dropoff_datetime) >= unix_timestamp(tpep_pickup_datetime)
+and year(tpep_pickup_datetime) = 2017 and month(tpep_pickup_datetime) in (11,12)
+and year(tpep_dropoff_datetime) = 2017 and month(tpep_dropoff_datetime) in (11,12)
+and (RateCodeID between 1 and 6) and (passenger_count between 1 and 10) and trip_distance >= 0.0
+and (payment_type between 1 and 6) and tip_amount >= 0 and extra in (0,0.5,1)
+and Fare_amount >= 0 and MTA_tax in (0,0.5) and improvement_surcharge in (0,0.3) and Tolls_amount >= 0.0 and Total_amount >= 0);
+
+
+-- checking if data has loaded properly in the partitioned table
+select * from nyc_tlc_partitioned limit 10;
+
+
+-- creating an orc table from the partitioned table
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+drop table nyc_tlc_partitioned_orc;
+
+-- initially creating the orc table
+create external table if not exists nyc_tlc_partitioned_orc (VendorID int,
+tpep_pickup_datetime timestamp, tpep_dropoff_datetime timestamp,
+passenger_count int, trip_distance double, RatecodeID int, store_fwd_flag string,
+PULocationID int, DOLocationID int, payment_type int,
+fare_amount double, extra double, mta_tax double, tip_amount double,
+tolls_amount double, improvement_surcharge double, total_amount double)
+partitioned by (trip_month int, trip_day int)
+stored as orc
+location '/user/hive/warehouse/nyc_taxidata_partitioned_orc'
+tblproperties ("orc.compress" = "SNAPPY");
+
+
+--inserting the partitioned data in the orc table
+insert overwrite table nyc_tlc_partitioned_orc partition (trip_month, trip_day)
+select * from nyc_tlc_partitioned;
+
+select * from nyc_tlc_partitioned_orc limit 10;
+
+
+
+
+-- ###### Part 2: Analysis I ######
+
+-- [1] Compare the overall average fare per trip for November and December.
+
+select (case
+when trip_month==11 then 'November'
+else 'December'
+end) as trip_month, round(avg(fare_amount), 2)as avg_fare_amt
+from nyc_tlc_partitioned_orc
+group by trip_month;
+
+-- In the above query, we can see that the average fare per trip for November is 12.96 and for December is 12.76.
+
+
+select round(100*(max(avg_fare_amt) - min(avg_fare_amt))/max(avg_fare_amt), 2) as avg_fare_percentage_diff
+from (select trip_month, round(avg(fare_amount), 2)as avg_fare_amt
+from nyc_tlc_partitioned_orc
+group by trip_month)a;
+
+-- Additionally, we can also see that the average fare of November is greater than that of December by 1.54% approximately.
+
+
+
+-- [2] Explore the ‘number of passengers per trip’ - how many trips are made by each level of ‘Passenger_count’? Do most people travel solo
+-- or with other people?
+
+select travel_companion, count(*) as total_records
+from (select (case
+when passenger_count == 1 then 'solo'
+else 'group'
+end) as travel_companion
+from nyc_tlc_partitioned_orc)a
+group by travel_companion;
+
+-- Here, we can see that the number solo trips is 8,24,084 while the number of group trips is 3,38,359.
+
+
+select round(100*(max(total_records) - min(total_records))/max(total_records), 2) as percentage_diff
+from (select travel_companion, count(*) as total_records
+from (select (case
+when passenger_count == 1 then 'solo'
+else 'group'
+end) as travel_companion
+from nyc_tlc_partitioned_orc)a
+group by travel_companion)b;
+
+-- The percentage difference between the number of group trips and the number of solo trips is around 58.94%.
+-- Therefore, we can conclude that people usually travel solo than in a group.
+
+
+
+-- [3] Which is the most preferred mode of payment?
+
+select payment_type, count(*) as total_records
+from nyc_tlc_partitioned_orc
+group by payment_type
+order by total_records desc;
+
+-- Using this query, we can see that the highest number of records is present for payment_type = 1 with a total of 7,82,514 records.
+-- Upon checking the data dictionary, we can see that this type of payment corresponds to credit card.
+
+select round(100*max(total_records)/sum(total_records), 2) as highest_payment_percentage
+from(
+select payment_type, count(*) as total_records
+from nyc_tlc_partitioned_orc
+group by payment_type)a;
+
+-- We can also see that approximately 67.32% of the total payments is done using credit cards.
+
+
+
+-- [4] What is the average tip paid per trip? Compare the average tip with the 25th, 50th and 75th percentiles and comment whether
+-- the ‘average tip’ is a representative statistic (of the central tendency) of ‘tip amount paid’.
+
+-- Since the tip amount for cash trips is not registered in the system, we will not considered such records for analysis
+
+select count(distinct tip_amount) as n_tip_amount,
+round(percentile_approx(tip_amount,0.25), 2) as tip_25percentile,
+round(percentile_approx(tip_amount, 0.50), 2)as tip_50percentile,
+round(percentile_approx(tip_amount, 0.75), 2)as tip_75percentile,
+round(avg(tip_amount), 2) as avg_tip_amt
+from nyc_tlc_partitioned_orc
+where payment_type != 2;
+
+-- The following observations are made for the tip_amount column where the payment is not done in cash:
+-- >> Distinct: For all payment modes other than 'cash', there are 2119 unique values for tip amounts present in the dataset.
+-- >> 25th percentile: For 25% of the trips, the tip amount is either less than or equal to 1.32.
+-- >> 50th percentile: 50% of the passengers have paid a tip amount of 2 or less.
+-- >> 75th percentile: The tip amount for 75% of trips is either equal to or less than 3.05.
+-- >> Average: The average tip amount for each of the trips is 2.7.
+
+-- We can see that there is a difference of 0.7 units between the average tip amount and the 50th percentile of the tip amount.
+-- Hence, it can be said that even though the average tip amount might seem like a good representative of the central tendency,
+-- the 50th percentile shows that the reality is quite different with around half the customers paying a much smaller amount.
+
+
+
+-- [5] Explore the ‘Extra’ (charge) variable - what fraction of total trips have an extra charge is levied?
+
+select extra as extra_chgs, count(*)as total_records
+from nyc_tlc_partitioned_orc
+group by extra
+order by extra;
+
+-- The total number of records where any extra charges have not been levied is 6,27,551.
+-- An extra charge of 0.5 has been applied for a total of 3,61,531 records.
+-- For a total of 1,73,361 records, the extra charge that has been added is 1.
+
+
+select sum(case when extra != 0 then 1
+else 0 end) as n_records_extra_chgs, count(*) as total_record,
+round(100*(sum(case when extra != 0 then 1
+else 0 end)/count(*)),2) as percent_extra_chgs
+from nyc_tlc_partitioned_orc;
+
+-- This query shows that an extra charge has been levied for 5,34,892 records out of a total of 11,62,443.
+-- The percentage of trips in which an extra charge has been applied is 46.01
+
+
+
+
+-- ###### Part 3: Analysis II ######
+
+-- [1] What is the correlation between the number of passengers on any given trip, and the tip paid per trip? Do multiple travellers tip
+-- more compared to solo travellers? Hint: Use CORR(Col_1, Col_2)
+
+-- Again, we will not be considering the records in which payment mode is 'cash' since such records do not register the tip amount.
+
+select round(corr(tip_amount, passenger_count), 5) as tip_passgr_corr,
+round(avg(case when passenger_count != 1 then tip_amount else NULL end), 2) as avg_tip_grp,
+round(avg(case when passenger_count = 1 then tip_amount else NULL end), 2) as avg_tip_solo
+from nyc_tlc_partitioned_orc
+where payment_type != 2;
+
+-- As we can see that the correlation between the number of passengers and the tip amount for a trip have negligible correlation of 0.00846.
+-- Furthermore, we can also see that the average tip amount for both solo travellers as well as groups are highly similar.
+-- The average tip amount for groups is 2.76 and for solo trips is 2.67.
+
+
+
+-- [2] Segregate the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20. Calculate the percentage share
+-- of each bucket (i.e. the fraction of trips falling in each bucket).
+
+-- Once again, we will perform the analysis after filtering out the trips with 'cash' payments because these records usually contain the tip
+-- amount as 0. Therefore, it will be erroneous to consider these records as they will also impact the percentages.
+
+select tip_paid, count(*) as n_records, avg(n_records) as total_records, 
+round(100*(count(*)/avg(n_records)), 2)as percent_records
+from (select temp.*, count(*) over () as n_records,
+(case when tip_amount between 0 and 4 then '0_5' 
+when tip_amount between 5 and 9 then '5_10'
+when tip_amount between 10 and 14 then '10_15'
+when tip_amount between 15 and 19 then '15_20'
+else 'above_20' 
+end) as tip_paid 
+from nyc_tlc_partitioned_orc temp
+where payment_type != 2)a
+group by tip_paid
+order by percent_records desc;
+
+-- The highest percentage of records are available for the [0-5) bucket with 84.43%.
+-- The [5-10) bucket carries 7.65% of the total number of records apart from the cash trips.
+-- In the (>=20) bucket, approximately 5.32% of the total number of trips are present.
+-- The percentage of records available in the [10-15) bucket is 2.33%.
+-- The [15-20) bucket contains the lowest percentage of total records, i.e. 0.28%.
+
+
+
+-- [3] Which month has a greater average ‘speed’ - November or December? Note that the variable ‘speed’ will have to be derived from other
+-- metrics. Hint: You have columns for distance and time.
+
+-- For this analysis, we will have to determine the time taken during the trip by extracting the time from the pickup and dropoff timestamps.
+-- Since this time is in seconds, we will have to divide it by 3,600 to convert into hour.
+
+select (case
+when trip_month == 11 then 'November'
+else 'December'
+end) as month_avg_speed,
+round(avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)), 3) as trip_speed
+from nyc_tlc_partitioned_orc
+group by trip_month
+order by trip_speed desc;
+
+-- In the results of this query, we can see that the average speed for December is 11.046 and November is 10.948.
+
+select round(max(trip_speed) - min(trip_speed), 5) as avg_speed_diff
+from( select trip_month,
+avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)) as trip_speed
+from nyc_tlc_partitioned_orc
+group by trip_month)a;
+
+-- It is clear that the average speed for the month of December is greater than that of November with a difference of 0.9848.
+
+
+
+-- [4] Analyse the average speed of the most happening days of the year, i.e. 31st December (New year’s eve) and 25th December (Christmas)
+-- and compare it with the overall average.
+
+-- overall average speed of trips
+select round(avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)), 3) as avg_trip_speed
+from nyc_tlc_partitioned_orc;
+
+
+-- average speed on Christmas (25th December)
+select round(avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)), 3) as avg_speed_Christmas
+from nyc_tlc_partitioned_orc
+where trip_month==12 and trip_day==25;
+
+
+-- average speed on New Year's Eve (31st December)
+select round(avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)), 3) as avg_speed_NewYear
+from nyc_tlc_partitioned_orc
+where trip_month==12 and trip_day==31;
+
+-- >> The overall average speed for trips is 10.997.
+-- >> The average speed on Christmas Eve is 15.241.
+-- >> The average speed on New Year's Eve is 13.232.
+-- >> Here, we can easily concur that the average speed on both Christmas and New Year's Eve is greater than that of the overall average.
+-- >> However, the average speed on Christmas is the highest of all the three observations made here.
+
+-- ## END ##
