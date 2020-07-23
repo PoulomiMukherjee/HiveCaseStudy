@@ -1,4 +1,4 @@
-# HiveCaseStudy
+# Big data analysis (EDA) on New York taxi data using HiveQL
 
 #### Problem Statement
 
